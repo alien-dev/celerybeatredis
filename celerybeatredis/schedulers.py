@@ -283,7 +283,7 @@ class RedisScheduler(Scheduler):
         return self._last_updated + self.UPDATE_INTERVAL < datetime.datetime.now()
 
     def get_from_database(self):
-        # self.sync()
+        self.sync()
         d = {}
         for task in PeriodicTask.get_all():
             t = PeriodicTask.from_dict(task)
@@ -298,10 +298,7 @@ class RedisScheduler(Scheduler):
         return self._schedule
 
     def sync(self):
-        # saving_list = [t for t in self._schedule.values() if t.name in PeriodicTask.get_all()]
-
-        # for entry in saving_list:
-        for entry in self.schedule.values():
+        for entry in self._schedule.values():
             entry.save()
 
     def close(self):
