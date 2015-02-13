@@ -21,10 +21,6 @@ from redis.client import StrictRedis
 
 from decoder import DateTimeDecoder, DateTimeEncoder
 
-# share with result backend
-rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
-
-
 class ValidationError(Exception):
     pass
 
@@ -126,12 +122,14 @@ class PeriodicTask(object):
     def get_all():
         """get all of the tasks, for best performance with large amount of tasks, return a generator
         """
+	rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
         tasks = rdb.keys(current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX + '*')
         for task_name in tasks:
             yield json.loads(rdb.get(task_name), cls=DateTimeDecoder)
 
     def save(self):
         # must do a deepcopy
+	rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
         self_dict = deepcopy(self.__dict__)
         if self_dict.get('interval'):
             self_dict['interval'] = self.interval.__dict__
