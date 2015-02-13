@@ -15,11 +15,4 @@ setup(
     packages = [
         "celerybeatredis"
     ],
-
-    install_requires=[
-        'setuptools',
-        'redis',
-        'celery'
-    ]
-
 )
