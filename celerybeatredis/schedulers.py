@@ -15,6 +15,7 @@ except ImportError:
 from celery.beat import Scheduler, ScheduleEntry
 from celery.utils.log import get_logger
 from celery import current_app
+from celerymethods import celeryconfig
 import celery.schedules
 
 from redis.client import StrictRedis
@@ -57,7 +58,6 @@ class PeriodicTask(object):
 
     no_changes = False
 
-
     def __init__(self, name, task, schedule, key=None, enabled=True, task_args=[], task_kwargs={}, **kwargs):
         self.task = task
         self.enabled = enabled
@@ -68,11 +68,14 @@ class PeriodicTask(object):
         self.args = task_args
         self.kwargs = task_kwargs
 
+        #
+        # Use celeryconfig for adding tasks outside celery process
+        # where current_app is not available
+        #
         if not key:
-            self.name = current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name
+            self.name = celeryconfig.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name
         else:
-            self.name = current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name + ':' + key
-
+            self.name = celeryconfig.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name + ':' + key
 
     class Interval(object):
 
@@ -122,14 +125,18 @@ class PeriodicTask(object):
     def get_all():
         """get all of the tasks, for best performance with large amount of tasks, return a generator
         """
-	rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
+        rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
         tasks = rdb.keys(current_app.conf.CELERY_REDIS_SCHEDULER_KEY_PREFIX + '*')
         for task_name in tasks:
             yield json.loads(rdb.get(task_name), cls=DateTimeDecoder)
 
     def save(self):
         # must do a deepcopy
-	rdb = StrictRedis.from_url(current_app.conf.CELERY_REDIS_SCHEDULER_URL)
+        #
+        # Use celeryconfig for adding tasks outside celery process
+        # when current_app is not available
+        #
+        rdb = StrictRedis.from_url(celeryconfig.CELERY_REDIS_SCHEDULER_URL)
         self_dict = deepcopy(self.__dict__)
         if self_dict.get('interval'):
             self_dict['interval'] = self.interval.__dict__
