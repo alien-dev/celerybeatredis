@@ -22,6 +22,7 @@ from redis.client import StrictRedis
 
 from decoder import DateTimeDecoder, DateTimeEncoder
 
+
 class ValidationError(Exception):
     pass
 
@@ -29,38 +30,12 @@ class ValidationError(Exception):
 class PeriodicTask(object):
     '''represents a periodic task
     '''
-    name = None
-    task = None
-
-    type_ = None
-
-    interval = None
-    crontab = None
-
-    args = []
-    kwargs = {}
-
-    queue = None
-    exchange = None
-    routing_key = None
-
-    # datetime
-    expires = None
-    enabled = True
-
-    # datetime
-    last_run_at = None
-
-    total_run_count = 0
-
-    date_changed = None
-    description = None
-
-    no_changes = False
 
     def __init__(self, name, task, schedule, key=None, enabled=True, task_args=[], task_kwargs={}, **kwargs):
         self.task = task
         self.enabled = enabled
+        self.interval = None
+        self.crontab = None
         if isinstance(schedule, self.Interval):
             self.interval = schedule
         if isinstance(schedule, self.Crontab):
@@ -76,6 +51,23 @@ class PeriodicTask(object):
             self.name = celeryconfig.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name
         else:
             self.name = celeryconfig.CELERY_REDIS_SCHEDULER_KEY_PREFIX + name + ':' + key
+
+        self.type_ = None
+
+        self.queue = None
+        self.exchange = None
+        self.routing_key = None
+
+        # datetime
+        self.expires = None
+
+        # datetime
+        self.last_run_at = None
+
+        self.total_run_count = 0
+
+        self.date_changed = None
+        self.description = None
 
     class Interval(object):
 
@@ -138,11 +130,15 @@ class PeriodicTask(object):
         #
         rdb = StrictRedis.from_url(celeryconfig.CELERY_REDIS_SCHEDULER_URL)
         self_dict = deepcopy(self.__dict__)
-        if self_dict.get('interval'):
+        if self_dict.get('interval', None) is not None:
             self_dict['interval'] = self.interval.__dict__
-        if self_dict.get('crontab'):
+        if self_dict.get('crontab', None) is not None:
             self_dict['crontab'] = self.crontab.__dict__
         rdb.set(self.name, json.dumps(self_dict, cls=DateTimeEncoder))
+
+    def update(self):
+        if self.dirty:
+            self.save()
 
     def clean(self):
         """validation to ensure that you only have
@@ -161,9 +157,10 @@ class PeriodicTask(object):
         :param d: dict
         :return: PeriodicTask instance
         """
-        if d.get('interval'):
+        schedule = None
+        if d.get('interval', None) is not None:
             schedule = PeriodicTask.Interval(d['interval']['every'], d['interval']['period'])
-        if d.get('crontab'):
+        if d.get('crontab', None) is not None:
             schedule = PeriodicTask.Crontab(
                 d['crontab']['minute'],
                 d['crontab']['hour'],
@@ -171,6 +168,10 @@ class PeriodicTask(object):
                 d['crontab']['day_of_month'],
                 d['crontab']['month_of_year']
             )
+        if schedule is None:
+            # Invalid task
+            return None
+
         task = PeriodicTask(d['name'], d['task'], schedule)
         for key in d:
             if key not in ('interval', 'crontab', 'schedule'):
@@ -249,11 +250,25 @@ class RedisScheduleEntry(ScheduleEntry):
         return new_entry
 
     def save(self):
+        dirty = False
         if self.total_run_count > self._task.total_run_count:
             self._task.total_run_count = self.total_run_count
+            dirty = True
         if self.last_run_at and self._task.last_run_at and self.last_run_at > self._task.last_run_at:
             self._task.last_run_at = self.last_run_at
-        self._task.save()
+            dirty = True
+        if dirty:
+            self._task.save()
+
+    def update(self, task):
+        self._task = task
+        self.name = task.name
+        self.task = task.task
+
+        self.schedule = task.schedule
+
+        self.args = task.args
+        self.kwargs = task.kwargs
 
 
 class RedisScheduler(Scheduler):
@@ -274,7 +289,7 @@ class RedisScheduler(Scheduler):
         self._schedule = {}
         self._last_updated = None
         Scheduler.__init__(self, *args, **kwargs)
-        self.max_interval = (kwargs.get('max_interval') \
+        self.max_interval = (kwargs.get('max_interval')
                              or self.app.conf.CELERYBEAT_MAX_LOOP_INTERVAL or 300)
 
     def setup_schedule(self):
@@ -287,19 +302,22 @@ class RedisScheduler(Scheduler):
             return True
         return self._last_updated + self.UPDATE_INTERVAL < datetime.datetime.now()
 
-    def get_from_database(self):
-        self.sync()
-        d = {}
+    def update_from_database(self):
         for task in PeriodicTask.get_all():
             t = PeriodicTask.from_dict(task)
-            d[t.name] = RedisScheduleEntry(t)
-        return d
+            if t is None:
+                continue
+            if t.name in self._schedule:
+                self._schedule[t.name].update(t)
+            else:
+                self._schedule[t.name] = RedisScheduleEntry(t)
 
     @property
     def schedule(self):
         if self.requires_update():
-            self._schedule = self.get_from_database()
+            self.update_from_database()
             self._last_updated = datetime.datetime.now()
+            self.sync()
         return self._schedule
 
     def sync(self):
